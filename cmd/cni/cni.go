@@ -11,6 +11,8 @@ import (
 	"github.com/containernetworking/cni/pkg/types"
 	current "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/containernetworking/cni/pkg/version"
+	"github.com/containernetworking/plugins/pkg/ns"
+	"github.com/vishvananda/netlink"
 
 	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
 	"github.com/kubeovn/kube-ovn/pkg/request"
@@ -63,6 +65,94 @@ func cmdAdd(args *skel.CmdArgs) error {
 	})
 	if err != nil {
 		return types.NewError(types.ErrTryAgainLater, "RPC failed", err.Error())
+	}
+
+	if response.InterfaceType == "virtio" || response.InterfaceType == "macvtap" {
+		err = SetDriver(netConf.DeviceID, Virtio)
+		if err != nil {
+			return err
+		}
+
+		ifaceName := getVirtioInterfaceName(netConf.DeviceID)
+		if ifaceName == "" {
+			return fmt.Errorf("get virtio interface name timeout, deviceID %s", netConf.DeviceID)
+		}
+
+		macAddr, err := net.ParseMAC(response.MacAddress)
+		if err != nil {
+			return fmt.Errorf("failed to parse mac %s %v", macAddr, err)
+		}
+
+		vfLink, err := netlink.LinkByName(ifaceName)
+		if err != nil {
+			return fmt.Errorf("failed to lookup link %s: %v", ifaceName, err)
+		}
+		if err = netlink.LinkSetHardwareAddr(vfLink, macAddr); err != nil {
+			return fmt.Errorf("can not set mac address to vf nic:%s  %v", ifaceName, err)
+		}
+		if err := netlink.LinkSetAlias(vfLink, ifaceName); err != nil {
+			return fmt.Errorf("failed to set link alias for container nic %s: %v", vfLink, err)
+		}
+
+		podNS, err := ns.GetNS(args.Netns)
+		if err != nil {
+			return fmt.Errorf("failed to open netns %q: %v", args.Netns, err)
+		}
+
+		ipAddr, err := netlink.ParseAddr(util.GetIpAddrWithMask(response.IpAddress, response.CIDR))
+		if err != nil {
+			return fmt.Errorf("failed to parse ip addr %q: %v", response.IpAddress, err)
+		}
+
+		if response.InterfaceType == "virtio" {
+			if err = netlink.LinkSetNsFd(vfLink, int(podNS.Fd())); err != nil {
+				return fmt.Errorf("failed to move link to netns: %v", err)
+			}
+
+			if err = ns.WithNetNSPath(podNS.Path(), func(_ ns.NetNS) error {
+				err := netlink.AddrAdd(vfLink, ipAddr)
+				if err != nil {
+					return fmt.Errorf("failed to add ip addr: %v", err)
+				}
+
+				if err := netlink.LinkSetUp(vfLink); err != nil {
+					return fmt.Errorf("failed to set link up ip: %v", err)
+				}
+
+				return nil
+			}); err != nil {
+				return fmt.Errorf("failed to config in ns: %v", err)
+			}
+		} else {
+			macvtapLink := &netlink.Macvtap{
+				Macvlan: netlink.Macvlan{
+					LinkAttrs: netlink.LinkAttrs{Name: ifaceName + "-macvtap", ParentIndex: vfLink.Attrs().Index},
+					Mode:      netlink.MACVLAN_MODE_PASSTHRU,
+				},
+			}
+			if err := netlink.LinkAdd(macvtapLink); err != nil {
+				return fmt.Errorf("failed to add macvtap link: %v", err)
+			}
+			if err = netlink.LinkSetNsFd(macvtapLink, int(podNS.Fd())); err != nil {
+				return fmt.Errorf("failed to move link to netns: %v", err)
+			}
+
+			if err = ns.WithNetNSPath(podNS.Path(), func(_ ns.NetNS) error {
+				err := netlink.AddrAdd(macvtapLink, ipAddr)
+				if err != nil {
+					return fmt.Errorf("failed to add ip addr: %v", err)
+				}
+
+				if err := netlink.LinkSetUp(macvtapLink); err != nil {
+					return fmt.Errorf("failed to set link up ip: %v", err)
+				}
+
+				return nil
+			}); err != nil {
+				return fmt.Errorf("failed to config in ns: %v", err)
+			}
+
+		}
 	}
 
 	result := generateCNIResult(response, args.Netns)
@@ -135,6 +225,13 @@ func cmdDel(args *skel.CmdArgs) error {
 	netConf, _, err := loadNetConf(args.StdinData)
 	if err != nil {
 		return err
+	}
+
+	if IsVirtioDevice(netConf.DeviceID) {
+		err = SetDriver(netConf.DeviceID, Sriov)
+		if err != nil {
+			return err
+		}
 	}
 
 	client := request.NewCniServerClient(netConf.ServerSocket)

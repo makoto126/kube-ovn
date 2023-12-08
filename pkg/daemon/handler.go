@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
+	"libvirt.org/go/libvirt"
 
 	clientset "github.com/kubeovn/kube-ovn/pkg/client/clientset/versioned"
 	"github.com/kubeovn/kube-ovn/pkg/ovs"
@@ -35,6 +36,7 @@ type cniServerHandler struct {
 	KubeClient    kubernetes.Interface
 	KubeOvnClient clientset.Interface
 	Controller    *Controller
+	LibvirtCli    *libvirt.Connect
 }
 
 func createCniServerHandler(config *Configuration, controller *Controller) *cniServerHandler {
@@ -320,6 +322,9 @@ func (csh cniServerHandler) handleAdd(req *restful.Request, resp *restful.Respon
 			podNicName, err = csh.configureNicWithInternalPort(podRequest.PodName, podRequest.PodNamespace, podRequest.Provider, podRequest.NetNs, podRequest.ContainerID, ifName, macAddr, mtu, ipAddr, gw, isDefaultRoute, detectIPConflict, allRoutes, podRequest.DNS.Nameservers, podRequest.DNS.Search, ingress, egress, podRequest.DeviceID, nicType, latency, limit, loss, gatewayCheckMode, u2oInterconnectionIP)
 		} else if nicType == util.DpdkType {
 			err = csh.configureDpdkNic(podRequest.PodName, podRequest.PodNamespace, podRequest.Provider, podRequest.NetNs, podRequest.ContainerID, ifName, macAddr, mtu, ipAddr, gw, ingress, egress, getShortSharedDir(pod.UID, podRequest.VhostUserSocketVolumeName), podRequest.VhostUserSocketName)
+		} else if nicType == util.OffloadType {
+			podNicName = ifName
+			err = csh.configureJmndNic(podRequest.PodName, podRequest.PodNamespace, podRequest.Provider, podRequest.NetNs, podRequest.ContainerID, podRequest.VfDriver, ifName, macAddr, mtu, ipAddr, gw, isDefaultRoute, detectIPConflict, allRoutes, podRequest.DNS.Nameservers, podRequest.DNS.Search, ingress, egress, podRequest.DeviceID, nicType, latency, limit, loss, gatewayCheckMode, u2oInterconnectionIP)
 		} else {
 			podNicName = ifName
 			err = csh.configureNic(podRequest.PodName, podRequest.PodNamespace, podRequest.Provider, podRequest.NetNs, podRequest.ContainerID, podRequest.VfDriver, ifName, macAddr, mtu, ipAddr, gw, isDefaultRoute, detectIPConflict, allRoutes, podRequest.DNS.Nameservers, podRequest.DNS.Search, ingress, egress, podRequest.DeviceID, nicType, latency, limit, loss, gatewayCheckMode, u2oInterconnectionIP)
@@ -333,11 +338,11 @@ func (csh cniServerHandler) handleAdd(req *restful.Request, resp *restful.Respon
 			return
 		}
 
-		ifaceID := ovs.PodNameToPortName(podRequest.PodName, podRequest.PodNamespace, podRequest.Provider)
-		if err = ovs.ConfigInterfaceMirror(csh.Config.EnableMirror, pod.Annotations[util.MirrorControlAnnotation], ifaceID); err != nil {
-			klog.Errorf("failed mirror to mirror0, %v", err)
-			return
-		}
+		// ifaceID := ovs.PodNameToPortName(podRequest.PodName, podRequest.PodNamespace, podRequest.Provider)
+		// if err = ovs.ConfigInterfaceMirror(csh.Config.EnableMirror, pod.Annotations[util.MirrorControlAnnotation], ifaceID); err != nil {
+		// 	klog.Errorf("failed mirror to mirror0, %v", err)
+		// 	return
+		// }
 
 		if err = csh.Controller.addEgressConfig(podSubnet, ip); err != nil {
 			errMsg := fmt.Errorf("failed to add egress configuration: %v", err)
@@ -349,12 +354,26 @@ func (csh cniServerHandler) handleAdd(req *restful.Request, resp *restful.Respon
 		}
 	}
 
+	var interfaceType string
+	if vmName != "" {
+		interfaceType = "vfio"
+	} else if pod.Spec.RuntimeClassName == nil {
+		interfaceType = "virtio"
+	} else if *pod.Spec.RuntimeClassName == "kata-clh" {
+		interfaceType = "vfio"
+	} else if *pod.Spec.RuntimeClassName == "kata-fc" {
+		interfaceType = "macvtap"
+	} else {
+		interfaceType = "vfio"
+	}
+
 	response := &request.CniResponse{
-		Protocol:   util.CheckProtocol(cidr),
-		IpAddress:  ip,
-		MacAddress: macAddr,
-		CIDR:       cidr,
-		PodNicName: podNicName,
+		Protocol:      util.CheckProtocol(cidr),
+		IpAddress:     ip,
+		MacAddress:    macAddr,
+		CIDR:          cidr,
+		PodNicName:    podNicName,
+		InterfaceType: interfaceType,
 	}
 	if isDefaultRoute {
 		response.Gateway = gw
@@ -436,28 +455,14 @@ func (csh cniServerHandler) handleDel(req *restful.Request, resp *restful.Respon
 			}
 		}
 
-		var nicType string
-		if podRequest.DeviceID != "" {
-			nicType = util.OffloadType
-		} else if podRequest.VhostUserSocketVolumeName != "" {
-			nicType = util.DpdkType
-			if err = removeShortSharedDir(pod, podRequest.VhostUserSocketVolumeName); err != nil {
-				klog.Error(err.Error())
-				if err = resp.WriteHeaderAndEntity(http.StatusInternalServerError, request.CniResponse{Err: err.Error()}); err != nil {
-					klog.Errorf("failed to write response: %v", err)
-				}
-				return
-			}
-
-		} else {
-			nicType = pod.Annotations[fmt.Sprintf(util.PodNicAnnotationTemplate, podRequest.Provider)]
-		}
 		vmName := pod.Annotations[fmt.Sprintf(util.VmTemplate, podRequest.Provider)]
 		if vmName != "" {
 			podRequest.PodName = vmName
 		}
 
-		err = csh.deleteNic(podRequest.PodName, podRequest.PodNamespace, podRequest.ContainerID, podRequest.NetNs, podRequest.DeviceID, podRequest.IfName, nicType)
+		macAddr := pod.Annotations[fmt.Sprintf(util.MacAddressAnnotationTemplate, podRequest.Provider)]
+
+		err = csh.deleteNic(podRequest.PodName, podRequest.PodNamespace, podRequest.ContainerID, podRequest.NetNs, podRequest.DeviceID, podRequest.IfName, macAddr)
 		if err != nil {
 			errMsg := fmt.Errorf("del nic failed %v", err)
 			klog.Error(errMsg)

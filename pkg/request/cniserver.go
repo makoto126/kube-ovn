@@ -40,15 +40,16 @@ type CniRequest struct {
 
 // CniResponse is the cniserver response format
 type CniResponse struct {
-	Protocol   string    `json:"protocol"`
-	IpAddress  string    `json:"address"`
-	MacAddress string    `json:"mac_address"`
-	CIDR       string    `json:"cidr"`
-	Gateway    string    `json:"gateway"`
-	Mtu        int       `json:"mtu"`
-	PodNicName string    `json:"nicname"`
-	DNS        types.DNS `json:"dns"`
-	Err        string    `json:"error"`
+	InterfaceType string    `json:"interface_type"`
+	Protocol      string    `json:"protocol"`
+	IpAddress     string    `json:"address"`
+	MacAddress    string    `json:"mac_address"`
+	CIDR          string    `json:"cidr"`
+	Gateway       string    `json:"gateway"`
+	Mtu           int       `json:"mtu"`
+	PodNicName    string    `json:"nicname"`
+	DNS           types.DNS `json:"dns"`
+	Err           string    `json:"error"`
 }
 
 // Add pod request

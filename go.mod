@@ -45,7 +45,7 @@ require (
 	k8s.io/apimachinery v0.26.11
 	k8s.io/client-go v12.0.0+incompatible
 	k8s.io/klog/v2 v2.100.1
-	k8s.io/kubernetes v1.26.11
+	k8s.io/kubernetes v1.26.0-alpha.1
 	k8s.io/pod-security-admission v0.26.11
 	k8s.io/sample-controller v0.26.11
 	k8s.io/utils v0.0.0-20221128185143-99ec85e7a448
@@ -256,6 +256,7 @@ require (
 	kubevirt.io/api v0.58.0 // indirect
 	kubevirt.io/containerized-data-importer-api v1.55.2 // indirect
 	kubevirt.io/controller-lifecycle-operator-sdk/api v0.2.4 // indirect
+	libvirt.org/go/libvirt v1.9008.0 // indirect
 	moul.io/http2curl v1.0.0 // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.0.37 // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect

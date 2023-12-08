@@ -21,6 +21,7 @@ import (
 	"k8s.io/klog/v2"
 
 	kubeovnv1 "github.com/kubeovn/kube-ovn/pkg/apis/kubeovn/v1"
+	"github.com/kubeovn/kube-ovn/pkg/jmnd"
 	"github.com/kubeovn/kube-ovn/pkg/ovs"
 	"github.com/kubeovn/kube-ovn/pkg/request"
 	"github.com/kubeovn/kube-ovn/pkg/util"
@@ -126,18 +127,66 @@ func (csh cniServerHandler) configureNic(podName, podNamespace, provider, netns,
 	return nil
 }
 
-func (csh cniServerHandler) deleteNic(podName, podNamespace, containerID, netns, deviceID, ifName, nicType string) error {
-	var nicName string
-	hostNicName, containerNicName := generateNicName(containerID, ifName)
+func (csh cniServerHandler) configureJmndNic(podName, podNamespace, provider, netns, containerID, vfDriver, ifName, mac string, mtu int, ip, gateway string, isDefaultRoute, detectIPConflict bool, routes []request.Route, dnsServer, dnsSuffix []string, ingress, egress, DeviceID, nicType, latency, limit, loss string, gwCheckMode int, u2oInterconnectionIP string) error {
+	ipStr := util.GetIpWithoutMask(ip)
+	ifaceID := ovs.PodNameToPortName(podName, podNamespace, provider)
+	portName := fmt.Sprintf("%s_%s", containerID[:12], ifName)
 
-	if nicType == util.InternalType {
-		nicName = containerNicName
-	} else {
-		nicName = hostNicName
+	output, err := ovs.Exec(ovs.MayExist, "add-port", csh.Config.BridgeName, portName, "--",
+		"set", "interface", portName, "type=dpdk",
+		fmt.Sprintf("external_ids:iface-id=%s", ifaceID),
+		fmt.Sprintf("external_ids:vendor=%s", util.CniTypeName),
+		fmt.Sprintf("external_ids:pod_name=%s", podName),
+		fmt.Sprintf("external_ids:pod_namespace=%s", podNamespace),
+		fmt.Sprintf("external_ids:ip=%s", ipStr),
+		fmt.Sprintf("external_ids:pod_netns=%s", netns),
+		fmt.Sprintf("options={dpdk-devargs=\"net_jmnd_%s,iface=/tmp/sock_%s,client=1,queues=4\",n_rxq=\"4\",n_rxq_desc=\"256\",n_txq_desc=\"256\"}", portName, portName),
+	)
+	if err != nil {
+		return fmt.Errorf("add nic to ovs failed %v: %q", err, output)
+	}
+
+	// interfaceList, err := ovs.OvsFind("Interface", "name", "external-ids:bdf="+strings.ReplaceAll(DeviceID, ":", "#"))
+	// if err != nil {
+	// 	return err
+	// }
+	// if len(interfaceList) < 1 {
+	// 	return fmt.Errorf("ovs interface not found with DeviceID %s", DeviceID)
+	// }
+	// err = ovs.OvsSet("Interface", interfaceList[0], fmt.Sprintf("external_ids:iface-id=%s", ifaceID),
+	// 	fmt.Sprintf("external_ids:vendor=%s", util.CniTypeName),
+	// 	fmt.Sprintf("external_ids:pod_name=%s", podName),
+	// 	fmt.Sprintf("external_ids:pod_namespace=%s", podNamespace),
+	// 	fmt.Sprintf("external_ids:ip=%s", ipStr),
+	// 	fmt.Sprintf("external_ids:pod_netns=%s", netns))
+	// if err != nil {
+	// 	return err
+	// }
+
+	if err = ovs.SetInterfaceBandwidth(podName, podNamespace, ifaceID, egress, ingress); err != nil {
+		return err
+	}
+
+	if err = ovs.SetNetemQos(podName, podNamespace, ifaceID, latency, limit, loss); err != nil {
+		return err
+	}
+
+	if err = jmnd.LibvirtAttachDev(mac, portName, DeviceID); err != nil {
+		return fmt.Errorf("attatch dev to libvirt failed %v", err)
+	}
+
+	return nil
+}
+
+func (csh cniServerHandler) deleteNic(podName, podNamespace, containerID, netns, deviceID, ifName, macAddr string) error {
+	portName := fmt.Sprintf("%s_%s", containerID[:12], ifName)
+
+	if err := jmnd.LibvirtDetachDev(macAddr, portName, deviceID); err != nil {
+		klog.Errorf("detatch dev to libvirt failed %v", err)
 	}
 
 	// Remove ovs port
-	output, err := ovs.Exec(ovs.IfExists, "--with-iface", "del-port", "br-int", nicName)
+	output, err := ovs.Exec(ovs.IfExists, "--with-iface", "del-port", csh.Config.BridgeName, portName)
 	if err != nil {
 		return fmt.Errorf("failed to delete ovs port %v, %q", err, output)
 	}
@@ -149,35 +198,6 @@ func (csh cniServerHandler) deleteNic(podName, podNamespace, containerID, netns,
 		return err
 	}
 
-	if deviceID == "" {
-		hostLink, err := netlink.LinkByName(nicName)
-		if err != nil {
-			// If link already not exists, return quietly
-			// E.g. Internal port had been deleted by Remove ovs port previously
-			if _, ok := err.(netlink.LinkNotFoundError); ok {
-				return nil
-			}
-			return fmt.Errorf("find host link %s failed %v", nicName, err)
-		}
-
-		hostLinkType := hostLink.Type()
-		// Sometimes no deviceID input for vf nic, avoid delete vf nic.
-		if hostLinkType == "veth" {
-			if err = netlink.LinkDel(hostLink); err != nil {
-				return fmt.Errorf("delete host link %s failed %v", hostLink, err)
-			}
-		}
-	} else if pciAddrRegexp.MatchString(deviceID) {
-		// Ret VF index from PCI
-		vfIndex, err := sriovnet.GetVfIndexByPciAddress(deviceID)
-		if err != nil {
-			klog.Errorf("failed to get vf %s index, %v", deviceID, err)
-			return err
-		}
-		if err = setVfMac(deviceID, vfIndex, "00:00:00:00:00:00"); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

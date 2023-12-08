@@ -15,7 +15,7 @@ import (
 func NewCniServerClient(socketAddress string) CniServerClient {
 	request := gorequest.New()
 	request.Transport = &http.Transport{DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-		return net.Dial("unix", socketAddress)
+		return net.Dial("tcp", socketAddress)
 	}}
 	return CniServerClient{request}
 }

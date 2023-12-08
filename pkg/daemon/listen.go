@@ -11,7 +11,7 @@ import (
 )
 
 func listen(socket string) (net.Listener, func(), error) {
-	listener, err := net.Listen("unix", socket)
+	listener, err := net.Listen("tcp", socket)
 	if err != nil {
 		klog.Errorf("failed to bind socket to %s: %v", socket, err)
 		return nil, nil, err

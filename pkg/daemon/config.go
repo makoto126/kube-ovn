@@ -62,6 +62,7 @@ type Configuration struct {
 	TCPConnCheckPort          int
 	UDPConnCheckPort          int
 	KubeletDir                string
+	BridgeName                string
 }
 
 // ParseFlags will parse cmd args then init kubeClient and configuration
@@ -99,6 +100,7 @@ func ParseFlags() *Configuration {
 		argTCPConnectivityCheckPort = pflag.Int("tcp-conn-check-port", 8100, "TCP connectivity Check Port")
 		argUDPConnectivityCheckPort = pflag.Int("udp-conn-check-port", 8101, "UDP connectivity Check Port")
 		argKubeletDir               = pflag.String("kubelet-dir", "/var/lib/kubelet", "Path of the kubelet dir, default: /var/lib/kubelet")
+		argBridgeName               = pflag.String("bridge-name", "br-jmnd", "Name of ovs bridge name.")
 	)
 
 	// mute info log for ipset lib
@@ -152,11 +154,12 @@ func ParseFlags() *Configuration {
 		TCPConnCheckPort:          *argTCPConnectivityCheckPort,
 		UDPConnCheckPort:          *argUDPConnectivityCheckPort,
 		KubeletDir:                *argKubeletDir,
+		BridgeName:                *argBridgeName,
 	}
 	return config
 }
 
-func (config *Configuration) Init(nicBridgeMappings map[string]string) error {
+func (config *Configuration) Init() error {
 	if config.NodeName == "" {
 		klog.Info("node name not specified in command line parameters, fall back to the environment variable")
 		if config.NodeName = strings.ToLower(os.Getenv(util.HostnameEnv)); config.NodeName == "" {
@@ -170,9 +173,6 @@ func (config *Configuration) Init(nicBridgeMappings map[string]string) error {
 	}
 
 	if err := config.initKubeClient(); err != nil {
-		return err
-	}
-	if err := config.initNicConfig(nicBridgeMappings); err != nil {
 		return err
 	}
 

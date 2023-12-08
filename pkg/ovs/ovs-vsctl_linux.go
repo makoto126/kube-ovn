@@ -15,7 +15,7 @@ import (
 func SetInterfaceBandwidth(podName, podNamespace, iface, ingress, egress string) error {
 	ingressMPS, _ := strconv.Atoi(ingress)
 	ingressKPS := ingressMPS * 1000
-	interfaceList, err := ovsFind("interface", "name", fmt.Sprintf("external-ids:iface-id=%s", iface))
+	interfaceList, err := OvsFind("interface", "name", fmt.Sprintf("external-ids:iface-id=%s", iface))
 	if err != nil {
 		return err
 	}
@@ -32,7 +32,7 @@ func SetInterfaceBandwidth(podName, podNamespace, iface, ingress, egress string)
 
 	for _, ifName := range interfaceList {
 		// ingress_policing_rate is in Kbps
-		err := ovsSet("interface", ifName, fmt.Sprintf("ingress_policing_rate=%d", ingressKPS), fmt.Sprintf("ingress_policing_burst=%d", ingressKPS*8/10))
+		err := OvsSet("interface", ifName, fmt.Sprintf("ingress_policing_rate=%d", ingressKPS), fmt.Sprintf("ingress_policing_burst=%d", ingressKPS*8/10))
 		if err != nil {
 			return err
 		}
@@ -82,12 +82,12 @@ func ClearHtbQosQueue(podName, podNamespace, iface string) error {
 	var queueList []string
 	var err error
 	if iface != "" {
-		queueList, err = ovsFind("queue", "_uuid", fmt.Sprintf(`external-ids:iface-id="%s"`, iface))
+		queueList, err = OvsFind("queue", "_uuid", fmt.Sprintf(`external-ids:iface-id="%s"`, iface))
 		if err != nil {
 			return err
 		}
 	} else {
-		queueList, err = ovsFind("queue", "_uuid", fmt.Sprintf(`external-ids:pod="%s/%s"`, podNamespace, podName))
+		queueList, err = OvsFind("queue", "_uuid", fmt.Sprintf(`external-ids:pod="%s/%s"`, podNamespace, podName))
 		if err != nil {
 			return err
 		}
@@ -119,7 +119,7 @@ func ClearHtbQosQueue(podName, podNamespace, iface string) error {
 }
 
 func IsHtbQos(iface string) (bool, error) {
-	qosType, err := ovsFind("qos", "type", fmt.Sprintf(`external-ids:iface-id="%s"`, iface))
+	qosType, err := OvsFind("qos", "type", fmt.Sprintf(`external-ids:iface-id="%s"`, iface))
 	if err != nil {
 		return false, err
 	}
@@ -138,7 +138,7 @@ func SetHtbQosQueueRecord(podName, podNamespace, iface string, maxRateBPS int, q
 	}
 
 	if queueUid, ok := queueIfaceUidMap[iface]; ok {
-		if err := ovsSet("queue", queueUid, queueCommandValues...); err != nil {
+		if err := OvsSet("queue", queueUid, queueCommandValues...); err != nil {
 			return queueUid, err
 		}
 	} else {
@@ -171,7 +171,7 @@ func SetQosQueueBinding(podName, podNamespace, ifName, iface, queueUid string, q
 		if err != nil {
 			return err
 		}
-		err = ovsSet("port", ifName, fmt.Sprintf("qos=%s", qos))
+		err = OvsSet("port", ifName, fmt.Sprintf("qos=%s", qos))
 		if err != nil {
 			return err
 		}
@@ -196,7 +196,7 @@ func SetQosQueueBinding(podName, podNamespace, ifName, iface, queueUid string, q
 			}
 		}
 
-		if err := ovsSet("qos", qosUid, qosCommandValues...); err != nil {
+		if err := OvsSet("qos", qosUid, qosCommandValues...); err != nil {
 			return err
 		}
 	}
@@ -210,7 +210,7 @@ func SetNetemQos(podName, podNamespace, iface, latency, limit, loss string) erro
 	limitPkts, _ := strconv.Atoi(limit)
 	lossPercent, _ := strconv.ParseFloat(loss, 64)
 
-	interfaceList, err := ovsFind("interface", "name", fmt.Sprintf("external-ids:iface-id=%s", iface))
+	interfaceList, err := OvsFind("interface", "name", fmt.Sprintf("external-ids:iface-id=%s", iface))
 	if err != nil {
 		return err
 	}
@@ -243,7 +243,7 @@ func SetNetemQos(podName, podNamespace, iface, latency, limit, loss string) erro
 					return err
 				}
 
-				if err = ovsSet("port", ifName, fmt.Sprintf("qos=%s", qos)); err != nil {
+				if err = OvsSet("port", ifName, fmt.Sprintf("qos=%s", qos)); err != nil {
 					return err
 				}
 			} else {
@@ -284,7 +284,7 @@ func SetNetemQos(podName, podNamespace, iface, latency, limit, loss string) erro
 						return err
 					}
 
-					if err = ovsSet("port", ifName, fmt.Sprintf("qos=%s", qos)); err != nil {
+					if err = OvsSet("port", ifName, fmt.Sprintf("qos=%s", qos)); err != nil {
 						klog.Errorf("failed to set netem qos to port: %v", err)
 						return err
 					}
@@ -349,7 +349,7 @@ func deleteNetemQosById(qosId, iface, podName, podNamespace string) error {
 }
 
 func IsUserspaceDataPath() (is bool, err error) {
-	dp, err := ovsFind("bridge", "datapath_type", "name=br-int")
+	dp, err := OvsFind("bridge", "datapath_type", "name=br-int")
 	if err != nil {
 		return false, err
 	}
